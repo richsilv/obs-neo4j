@@ -1,0 +1,13 @@
+CommunityNodes = new Meteor.Collection('communityNodes');
+CurrentProject = new Meteor.Collection('currentProject');
+Edges= new Meteor.Collection('edges');
+Gephi = new Meteor.Collection('gephi');
+PrintMode = new Meteor.Collection('printMode');
+Projects = new Meteor.Collection('projects');
+RemainingWork = new Meteor.Collection('remainingWork');
+ScrapeLog = new Meteor.Collection('scrapeLog');
+Settings = new Meteor.Collection('settings');
+SourceTypes = new Meteor.Collection('sourceTypes');
+Sources = new Meteor.Collection('sources');
+Tasks = new Meteor.Collection('tasks');
+Updates = new Meteor.Collection('updates');
