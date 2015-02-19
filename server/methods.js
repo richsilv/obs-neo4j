@@ -1,4 +1,6 @@
-var Future = Meteor.npmRequire('fibers/future');
+var Fiber = Npm.require('fibers'),
+	Future = Meteor.npmRequire('fibers/future'),
+	async = Meteor.npmRequire('async');
 
 Meteor.methods({
 	
@@ -157,6 +159,13 @@ Meteor.methods({
 
 		return ids;
 		
+	},
+
+	'neo4j/addEdgesEfficient': function(query, options) {
+
+		this.unblock();
+		return addEdgesEfficient(query, options);
+
 	}
 
 });
@@ -198,18 +207,59 @@ function addNode(details) {
 
 }
 
-function getNode(_id) {
+function getNode(_id, callback) {
 
 	var fut = new Future();
 
 	N4JDB.query("MATCH (n {_id: {_id}}) \n RETURN n", {_id: _id}, function(err, res) {
 
-		if (err) fut.throw(err);
-		else fut.return(res.length && res[0].n);
+		if (callback) callback(err, res.length && res[0].n);
+		else {
+			if (err) fut.throw(err);
+			else fut.return(res.length && res[0].n);
+		}
 
 	});
 
-	return fut.wait();
+	return callback ? null : fut.wait();
+
+}
+
+function getOrAddNode(_id, callback) {
+
+	var fut = new Future(),
+		node = CommunityNodes.findOne(_id),
+		returnError = function(err) {
+			if (callback) callback(err, null);
+			else fut.throw(err);
+		},
+		returnResult = function(res) {
+			if (callback) callback(null, res);
+			else fut.return(res);
+		};
+
+	if (!node) returnError('No matching node');
+
+	N4JDB.query("MATCH (n {_id: {_id}}) \n RETURN n", {_id: _id}, function(err, res) {
+
+		if (err) returnError(err);
+
+		if (!res.length) {
+			var neoNode = N4JDB.createNode(cleanNode(node));
+			neoNode.save(function(err, newNode) {
+				if (err) returnError(err);
+				else {
+					console.log('Node saved to database with id:', newNode.id);
+					returnResult(newNode);
+				}
+			});
+		}
+
+		else returnResult(res[0].n);
+
+	});
+
+	return callback ? null : fut.wait();
 
 }
 
@@ -253,5 +303,62 @@ function clearDatabase() {
 		else fut.return(true);
 
 	});
+
+}
+
+function addEdgesEfficient(query, options) {
+
+	var fut = new Future(),
+		edges = Edges.find(query, options).fetch(),
+		ids = {},
+		wrappedGetOrAddNode = Meteor.bindEnvironment(getOrAddNode, function(e) {
+		 	console.log('Bind Error!', e.stack);
+		});
+
+	console.log('Adding ' + edges.length + ' edges if not already present');
+
+	async.each(edges, function(edge, cb) {
+
+		N4JDB.query("MATCH (n)-[r]-(m) WHERE r._id = {_id} RETURN r", {_id: edge._id}, function(err, res) {
+
+			if (err) throw err;
+			
+			if (!res.length) {
+
+				var edgeData = _.pick(edge, [
+						'project_id',
+						'_id',
+						'update_type',
+						'update_id'
+					]),
+					saveIdAndCallback = function(err, rel) {
+						console.log('Edge saved to database with id: ' + rel.id);
+						ids[edge._id] = rel.id;
+						cb();
+					};
+
+				async.parallel([
+					wrappedGetOrAddNode.bind(null, edge.source_node_id),
+					wrappedGetOrAddNode.bind(null, edge.target_node_id)
+					],
+					function(err, res) {
+						if (err) throw err;
+						createRelationship(res[0], res[1], edge.update_type, edgeData, saveIdAndCallback);
+					}					
+				);
+
+			} else cb();
+
+		});			
+
+	}, function(err) {
+		if (err) {
+			console.log('Failed with error', err);
+			fut.throw(err);
+		}
+		fut.return(ids);
+	});
+
+	return fut.wait();
 
 }
